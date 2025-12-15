@@ -11,7 +11,7 @@ load_dotenv()
 BASE_URL = "https://dieterenenergy.evc-net.com/api/ajax"
 
 # Configure the device IDs you want to monitor
-DEVICE_IDS = [155620231, 155620232]
+DEVICE_IDS = [155620231, 155620232, 156916081, 156916082]
 # Build the request payload
 REQUESTS_PAYLOAD = {
     "0": {
@@ -55,6 +55,9 @@ def check_status():
             for sublist in data:
                 if isinstance(sublist, list):
                     for device in sublist:
+                        street = device.get("location").get("address")
+                        city = device.get("location").get("city")
+                        location = f"{city} {street}"
                         device_id = device.get("id")
                         status_code = device.get("globalStatus")
                         name = device.get("physicalNumber")
@@ -65,8 +68,17 @@ def check_status():
                         status_text = STATUS_MAP.get(status_code, f"Unknown ({status_code})")
 
                         if last_status.get(device_id) != status_code:
-                            message = f"Device {device_id} ({name}) status changed to: {status_text}"
+                            message = f"Device {device_id} ({name}) {location} status changed to: {status_text}"
                             print(message)
+
+                            message = (
+                                        f"🔌 **EV Charger Update**\n"
+                                        f"📍 Location: `{location}`\n"
+                                        f"🏷️ Physical ID: `{name}`\n"
+                                        f"⚡ Status: **{status_text}**"
+                                    )
+
+
                             send_discord_message(message)
 
                         last_status[device_id] = status_code

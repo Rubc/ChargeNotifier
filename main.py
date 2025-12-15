@@ -1,15 +1,37 @@
+import os
 import requests
 import time
+import urllib.parse
+import json
+from dotenv import load_dotenv
 
-API_URL = "https://dieterenenergy.evc-net.com/api/ajax?requests=%7B%220%22%3A%7B%22handler%22%3A%22%5C%5CLMS%5C%5CEV%5C%5CAsyncServices%5C%5CDashboardAsyncService%22%2C%22method%22%3A%22spotsStatusPointData%22%2C%22params%22%3A%7B%22deviceIds%22%3A%5B155620231%2C155620232%5D%2C%22tariffProvider%22%3A295%7D%7D%7D&metricKey=DeviceMap_1037"
+# Load environment variables from .env
+load_dotenv()
 
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1448064495090925711/n7JONb8lRxU4ATfduddwOKngpysE2Bx4FsC3W75njWpJd48I3i0olyMQ4BBF04tYEwgP"
+BASE_URL = "https://dieterenenergy.evc-net.com/api/ajax"
 
-INTERVAL = 60  # seconds
+# Configure the device IDs you want to monitor
+DEVICE_IDS = [155620231, 155620232, 156916081, 156916082]
+# Build the request payload
+REQUESTS_PAYLOAD = {
+    "0": {
+        "handler": "\\LMS\\EV\\AsyncServices\\DashboardAsyncService",
+        "method": "spotsStatusPointData",
+        "params": {
+            "deviceIds": DEVICE_IDS
+        }
+    }
+}
+
+encoded_requests = urllib.parse.quote(json.dumps(REQUESTS_PAYLOAD))
+API_URL = f"{BASE_URL}?requests={encoded_requests}"
+
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+
+INTERVAL = 300  # seconds
 
 last_status = {}
 
-# Map numeric codes to human-readable states
 STATUS_MAP = {
     1: "Available",
     3: "Charging"
@@ -29,11 +51,13 @@ def check_status():
         response.raise_for_status()
         data = response.json()
 
-        # The response is [[{...}, {...}]]
         if isinstance(data, list):
             for sublist in data:
                 if isinstance(sublist, list):
                     for device in sublist:
+                        street = device.get("location").get("address")
+                        city = device.get("location").get("city")
+                        location = f"{city} {street}"
                         device_id = device.get("id")
                         status_code = device.get("globalStatus")
                         name = device.get("physicalNumber")
@@ -41,16 +65,22 @@ def check_status():
                         if device_id is None or status_code is None:
                             continue
 
-                        # Translate status code
                         status_text = STATUS_MAP.get(status_code, f"Unknown ({status_code})")
 
-                        # Compare with last known status
                         if last_status.get(device_id) != status_code:
-                            message = f"Device {device_id} ({name}) status changed to: {status_text}"
+                            message = f"Device {device_id} ({name}) {location} status changed to: {status_text}"
                             print(message)
+
+                            message = (
+                                        f"🔌 **EV Charger Update**\n"
+                                        f"📍 Location: `{location}`\n"
+                                        f"🏷️ Physical ID: `{name}`\n"
+                                        f"⚡ Status: **{status_text}**"
+                                    )
+
+
                             send_discord_message(message)
 
-                        # Update stored status
                         last_status[device_id] = status_code
 
     except Exception as e:

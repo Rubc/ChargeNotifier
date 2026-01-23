@@ -3,6 +3,8 @@ import requests
 import time
 import urllib.parse
 import json
+import csv
+from datetime import datetime
 from dotenv import load_dotenv
 
 # Load environment variables from .env
@@ -11,7 +13,7 @@ load_dotenv()
 BASE_URL = "https://dieterenenergy.evc-net.com/api/ajax"
 
 # Configure the device IDs you want to monitor
-DEVICE_IDS = [155620231, 155620232, 156916081, 156916082]
+DEVICE_IDS = [155620231, 155620232]
 # Build the request payload
 REQUESTS_PAYLOAD = {
     "0": {
@@ -80,11 +82,18 @@ def check_status():
 
 
                             send_discord_message(message)
+                            log_status(device_id, status_text)
 
                         last_status[device_id] = status_code
 
     except Exception as e:
         print(f"Error fetching/parsing API: {e}")
+
+LOGFILE = "charger_history.csv"
+def log_status(charger_id, status):
+     with open(LOGFILE, "a", newline="") as f:
+        writer = csv.writer(f) 
+        writer.writerow([datetime.now().isoformat(), charger_id, status])
 
 def main():
     while True:

@@ -62,7 +62,13 @@ def predict(df, sessions_df, averages):
             continue
 
         # Charger is Charging → find current session start
-        last_session = sessions_df[sessions_df["charger_id"] == charger_id].iloc[-1]
+        charger_sessions = sessions_df[sessions_df['charger_id'] == charger_id]
+
+        if charger_sessions.empty:
+            print(f"No completed sessions found for charger {charger_id}. Cannot predict yet.")
+            continue
+
+        last_session = charger_sessions.iloc[-1]
         avg_duration = averages[charger_id]
 
         current_length = (now - last_session["start"]).total_seconds() / 60

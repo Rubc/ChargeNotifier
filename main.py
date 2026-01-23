@@ -91,9 +91,21 @@ def check_status():
 
 LOGFILE = "charger_history.csv"
 def log_status(charger_id, status):
-     with open(LOGFILE, "a", newline="") as f:
-        writer = csv.writer(f) 
-        writer.writerow([datetime.now().isoformat(), charger_id, status])
+    # Format timestamp WITHOUT microseconds
+    timestamp = datetime.now().replace(microsecond=0).isoformat()
+
+    # Check if file exists AND is non‑empty
+    file_needs_header = not os.path.exists(LOGFILE) or os.path.getsize(LOGFILE) == 0
+
+    with open(LOGFILE, "a", newline="") as f:
+        writer = csv.writer(f)
+
+        # Write header only once
+        if file_needs_header:
+            writer.writerow(["timestamp", "charger_id", "status"])
+
+        # Write the actual log row
+        writer.writerow([timestamp, charger_id, status])
 
 def main():
     while True:

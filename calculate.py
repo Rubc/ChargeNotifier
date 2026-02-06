@@ -4,23 +4,31 @@ import tzlocal
 
 CSV_PATH = "charger_history.csv"
 
+def fmt(td: timedelta) -> str:
+    """Format a timedelta as Hh Mm (no seconds)."""
+    total_minutes = int(td.total_seconds() // 60)
+    hours = total_minutes // 60
+    minutes = total_minutes % 60
+    return f"{hours}h {minutes}m"
 
-def load_csv_data():
+
+def load_data():
     df = pd.read_csv(CSV_PATH)
 
-    # Parse timestamps as UTC (server writes UTC)
     df["timestamp"] = pd.to_datetime(df["timestamp"], format="mixed", utc=True)
 
-    # Convert to local timezone of the machine running the script
     local_tz = tzlocal.get_localzone()
     df["timestamp"] = df["timestamp"].dt.tz_convert(local_tz)
 
-    # Remove Unknown states (e.g. "Unknown (101)")
     df = df[~df["status"].str.startswith("Unknown")]
 
     df = df.sort_values(["charger_id", "timestamp"])
     return df
 
+
+# ------------------------------------------------------------
+# Extract complete Charging → Available sessions
+# ------------------------------------------------------------
 def extract_sessions(df):
     sessions = []
 
@@ -46,7 +54,6 @@ def extract_sessions(df):
                 start_time = None
 
     return pd.DataFrame(sessions)
-
 
 def compute_current_sessions(df):
     local_tz = tzlocal.get_localzone()
@@ -84,9 +91,21 @@ def estimate_eta(avg_durations, current_sessions):
 
     return eta
 
+def calculate_daily_usage(sessions):
+    sessions["date"] = sessions["start"].dt.date
+    sessions["weekday"] = sessions["start"].dt.day_name()
+    sessions["hours"] = sessions["duration"].dt.total_seconds() / 3600
+
+    daily = sessions.groupby(["charger_id", "date", "weekday"])["hours"].sum()
+
+    print("\n=== Daily Charging Hours (hours only) ===")
+    for (charger_id, date, weekday), hours in daily.items():
+        print(f"{weekday} {date} — Charger {charger_id}: {hours:.2f} hours")
+
+    return daily
 
 def main():
-    df = load_csv_data()
+    df = load_data()
     sessions = extract_sessions(df)
 
     if sessions.empty:
@@ -104,21 +123,23 @@ def main():
 
     print("\n=== Average Charging Duration ===")
     for cid, avg in avg_durations.items():
-        print(f"Charger {cid}: {avg}")
+        print(f"Charger {cid}: {fmt(avg)}")
 
     print("\n=== Current Session Length ===")
     for cid, cur in current_sessions.items():
         if cur is None:
             print(f"Charger {cid}: Not currently charging")
         else:
-            print(f"Charger {cid}: {cur}")
+            print(f"Charger {cid}: {fmt(cur)}")
 
     print("\n=== ETA Until Available ===")
     for cid, t in eta.items():
         if t is None:
             print(f"Charger {cid}: Already available")
         else:
-            print(f"Charger {cid}: {t}")
+            print(f"Charger {cid}: {t.strftime('%Y-%m-%d %H:%M')}")
+
+    calculate_daily_usage(sessions)
 
 
 if __name__ == "__main__":

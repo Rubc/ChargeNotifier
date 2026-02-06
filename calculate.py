@@ -15,6 +15,9 @@ def load_csv_data():
     local_tz = tzlocal.get_localzone()
     df["timestamp"] = df["timestamp"].dt.tz_convert(local_tz)
 
+    # Remove Unknown states (e.g. "Unknown (101)")
+    df = df[~df["status"].str.startswith("Unknown")]
+
     df = df.sort_values(["charger_id", "timestamp"])
     return df
 

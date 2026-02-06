@@ -1,20 +1,21 @@
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
+import tzlocal
 
-CSV_FILE = "charger_history.csv"
+CSV_PATH = "charger_history.csv"
 
-def load_data():
-    df = pd.read_csv(
-        "charger_history.csv",
-        names=["timestamp", "charger_id", "status"],
-        header=0,
-        comment="#",
-        skip_blank_lines=True,
-        on_bad_lines="skip",
-        encoding="utf-8-sig"
-    )
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df = df.sort_values("timestamp")
+
+def load_csv_data():
+    df = pd.read_csv(CSV_PATH)
+
+    # Parse timestamps as UTC (server writes UTC)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], format="mixed", utc=True)
+
+    # Convert to local timezone of the machine running the script
+    local_tz = tzlocal.get_localzone()
+    df["timestamp"] = df["timestamp"].dt.tz_convert(local_tz)
+
+    df = df.sort_values(["charger_id", "timestamp"])
     return df
 
 def extract_sessions(df):
@@ -22,87 +23,100 @@ def extract_sessions(df):
 
     for charger_id, group in df.groupby("charger_id"):
         group = group.sort_values("timestamp")
-        current_start = None
+        start_time = None
 
         for _, row in group.iterrows():
             if row["status"] == "Charging":
-                current_start = row["timestamp"]
+                start_time = row["timestamp"]
 
-            elif row["status"] == "Available" and current_start is not None:
-                duration = (row["timestamp"] - current_start).total_seconds() / 60
+            elif row["status"] == "Available" and start_time is not None:
+                end_time = row["timestamp"]
+                duration = end_time - start_time
+
                 sessions.append({
                     "charger_id": charger_id,
-                    "start": current_start,
-                    "end": row["timestamp"],
-                    "duration_min": duration
+                    "start": start_time,
+                    "end": end_time,
+                    "duration": duration
                 })
-                current_start = None
+
+                start_time = None
 
     return pd.DataFrame(sessions)
 
-def calculate_averages(sessions_df):
-    return sessions_df.groupby("charger_id")["duration_min"].mean()
 
-def predict(df, sessions_df, averages):
-    predictions = {}
+def compute_current_sessions(df):
+    local_tz = tzlocal.get_localzone()
+    now = datetime.now(local_tz)
 
-    latest = df.sort_values("timestamp").groupby("charger_id").tail(1)
+    current = {}
 
-    now = datetime.now()
+    for charger_id, group in df.groupby("charger_id"):
+        last = group.sort_values("timestamp").iloc[-1]
 
-    for _, row in latest.iterrows():
-        charger_id = row["charger_id"]
-        status = row["status"]
+        if last["status"] == "Charging":
+            current[charger_id] = now - last["timestamp"]
+        else:
+            current[charger_id] = None
 
-        if status == "Available":
-            predictions[charger_id] = {
-                "status": "Available",
-                "message": "Charger is already free"
-            }
+    return current
+
+
+def estimate_eta(avg_durations, current_sessions):
+    local_tz = tzlocal.get_localzone()
+    now = datetime.now(local_tz)
+
+    eta = {}
+
+    for charger_id in avg_durations.index:
+        avg = avg_durations.loc[charger_id]
+        current = current_sessions[charger_id]
+
+        if current is None:
+            eta[charger_id] = None
             continue
 
-        # Charger is Charging → find current session start
-        charger_sessions = sessions_df[sessions_df['charger_id'] == charger_id]
+        remaining = avg - current
+        eta[charger_id] = now + remaining if remaining > timedelta(0) else now
 
-        if charger_sessions.empty:
-            print(f"No completed sessions found for charger {charger_id}. Cannot predict yet.")
-            continue
+    return eta
 
-        last_session = charger_sessions.iloc[-1]
-        avg_duration = averages[charger_id]
-
-        current_length = (now - last_session["start"]).total_seconds() / 60
-        minutes_left = max(avg_duration - current_length, 0)
-
-        predictions[charger_id] = {
-            "status": "Charging",
-            "avg_duration": avg_duration,
-            "current_length": current_length,
-            "minutes_left": minutes_left,
-            "eta": now + pd.Timedelta(minutes=minutes_left)
-        }
-
-    return predictions
 
 def main():
-    df = load_data()
-    sessions_df = extract_sessions(df)
-    averages = calculate_averages(sessions_df)
-    predictions = predict(df, sessions_df, averages)
+    df = load_csv_data()
+    sessions = extract_sessions(df)
 
-    print("\n=== Charger Predictions ===\n")
+    if sessions.empty:
+        print("No complete sessions found.")
+        return
 
-    for charger_id, info in predictions.items():
-        print(f"Charger {charger_id}:")
+    # Average duration per charger
+    avg_durations = sessions.groupby("charger_id")["duration"].mean()
 
-        if info["status"] == "Available":
-            print("  → Already Available\n")
-            continue
+    # Current session lengths
+    current_sessions = compute_current_sessions(df)
 
-        print(f"  Average charge time: {info['avg_duration']:.1f} min")
-        print(f"  Current session length: {info['current_length']:.1f} min")
-        print(f"  Predicted minutes left: {info['minutes_left']:.1f} min")
-        print(f"  ETA Available: {info['eta']}\n")
+    # ETA until available
+    eta = estimate_eta(avg_durations, current_sessions)
+
+    print("\n=== Average Charging Duration ===")
+    for cid, avg in avg_durations.items():
+        print(f"Charger {cid}: {avg}")
+
+    print("\n=== Current Session Length ===")
+    for cid, cur in current_sessions.items():
+        if cur is None:
+            print(f"Charger {cid}: Not currently charging")
+        else:
+            print(f"Charger {cid}: {cur}")
+
+    print("\n=== ETA Until Available ===")
+    for cid, t in eta.items():
+        if t is None:
+            print(f"Charger {cid}: Already available")
+        else:
+            print(f"Charger {cid}: {t}")
+
 
 if __name__ == "__main__":
     main()
